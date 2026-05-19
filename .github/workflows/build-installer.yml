@@ -28,14 +28,14 @@ jobs:
           python -m pip install pyinstaller==6.3.0 pystray==0.19.5 Pillow==10.2.0 requests==2.31.0
 
       - name: Build tray launcher .exe
-        working-directory: mf-analyser/installer/tray_launcher
+        working-directory: installer/tray_launcher
         run: pyinstaller launcher.spec --clean --noconfirm
 
       - name: Install Inno Setup
         run: choco install innosetup --no-progress -y
 
       - name: Compile installer
-        working-directory: mf-analyser/installer
+        working-directory: installer
         run: |
           $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
           if (!(Test-Path $iscc)) { $iscc = "C:\Program Files\Inno Setup 6\ISCC.exe" }
@@ -46,12 +46,12 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Z1NMFAnalyser-Installer
-          path: mf-analyser/installer/Output/Z1NMFAnalyser-Setup-*.exe
+          path: installer/Output/Z1NMFAnalyser-Setup-*.exe
           if-no-files-found: error
 
       - name: Attach to GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: mf-analyser/installer/Output/Z1NMFAnalyser-Setup-*.exe
+          files: installer/Output/Z1NMFAnalyser-Setup-*.exe
           generate_release_notes: true

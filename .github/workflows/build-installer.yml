@@ -9,6 +9,9 @@ on:
       - "v*.*.*"
   workflow_dispatch:
 
+permissions:
+  contents: write   # allow softprops/action-gh-release to create / update Releases
+
 jobs:
   build:
     runs-on: windows-latest

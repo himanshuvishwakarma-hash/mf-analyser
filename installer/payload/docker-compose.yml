@@ -1,0 +1,72 @@
+# Z1N MF Analyser - production compose, bundled with installer.
+# No bind mounts - all data lives in named volumes so it survives upgrades.
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: z1n_mf_pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-mfa}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: ${POSTGRES_DB:-mfa}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mfa} -d ${POSTGRES_DB:-mfa}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: z1n_mf_redis
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  backend:
+    image: ghcr.io/z1ncapital/mf-analyser-backend:${APP_VERSION:-2.0.0}
+    container_name: z1n_mf_backend
+    restart: unless-stopped
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis:    { condition: service_healthy }
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-mfa}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-mfa}
+      REDIS_URL: redis://redis:6379/0
+      LOG_LEVEL: INFO
+      ENVIRONMENT: production
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+    ports:
+      - "8000:8000"
+
+  worker:
+    image: ghcr.io/z1ncapital/mf-analyser-backend:${APP_VERSION:-2.0.0}
+    container_name: z1n_mf_worker
+    restart: unless-stopped
+    depends_on:
+      - backend
+    command: ["celery", "-A", "app.tasks.celery_app", "worker", "--beat", "-l", "info"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-mfa}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-mfa}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_SCHEDULE_HOUR: "23"
+
+  frontend:
+    image: ghcr.io/z1ncapital/mf-analyser-frontend:${APP_VERSION:-2.0.0}
+    container_name: z1n_mf_frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "5173:80"
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000/api/v1
+
+volumes:
+  pg_data:

@@ -56,6 +56,46 @@ def _exclude_direct_plans(stmt):
     return stmt
 
 
+# Frontend button labels -> DB filters. AMFI taxonomy splits ETFs and Index
+# funds into category="Other" with various sub_category strings. The mapping
+# below lets the discover page work with friendly labels.
+CATEGORY_ALIASES: dict[str, dict[str, list[str]]] = {
+    "Equity":    {"categories": ["Equity"]},
+    "Debt":      {"categories": ["Debt"]},
+    "Hybrid":    {"categories": ["Hybrid"]},
+    "Index/ETF": {"sub_patterns": ["%index%", "%etf%"]},
+    "Solution":  {"sub_patterns": ["%solution%", "%retirement%", "%children%"]},
+    "Other": {
+        "categories": ["Other"],
+        # Exclude sub_categories already covered by Index/ETF + Solution buttons
+        # so each fund shows under exactly one tab.
+        "exclude_sub_patterns": [
+            "%index%", "%etf%", "%solution%", "%retirement%", "%children%",
+        ],
+    },
+}
+
+
+def _apply_category_filter(stmt, category: str | None):
+    if not category:
+        return stmt
+    spec = CATEGORY_ALIASES.get(category)
+    if spec is None:
+        # Unknown label - treat as exact-match for backward compat.
+        return stmt.where(Fund.category == category)
+    if cats := spec.get("categories"):
+        stmt = stmt.where(Fund.category.in_(cats))
+    if subs := spec.get("sub_patterns"):
+        from sqlalchemy import or_
+        sub_lower = func.lower(Fund.sub_category)
+        stmt = stmt.where(or_(*[sub_lower.like(p) for p in subs]))
+    if excl := spec.get("exclude_sub_patterns"):
+        sub_lower = func.lower(Fund.sub_category)
+        for p in excl:
+            stmt = stmt.where(~sub_lower.like(p))
+    return stmt
+
+
 def _serialise_summary(
     fund: Fund, metric: FundMetric | None, score: FundScore | None
 ) -> dict[str, Any]:
@@ -109,8 +149,7 @@ def list_funds(
         .outerjoin(FundScore, FundScore.scheme_code == Fund.scheme_code)
         .where(Fund.is_active.is_(True))
     )
-    if category:
-        base = base.where(Fund.category == category)
+    base = _apply_category_filter(base, category)
     base = _exclude_direct_plans(base)
     count_stmt = select(func.count()).select_from(base.subquery())
     total = db.scalar(count_stmt) or 0

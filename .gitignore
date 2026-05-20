@@ -35,3 +35,5 @@ Thumbs.db
 
 backend/celerybeat-schedule*
 docs/Z1N_Setup_Guide.pdf
+FUNCODES-PRODCODE.xls
+backend/data/nse_master.xls

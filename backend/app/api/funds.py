@@ -237,10 +237,27 @@ def get_nav_history(
     to_date: str | None = Query(None, alias="to"),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
+    from datetime import date as _date
+
     if not db.get(Fund, scheme_code):
         raise HTTPException(status_code=404, detail=f"Fund {scheme_code} not found")
 
-    cache_key = f"nav:{scheme_code}:{from_date or ''}:{to_date or ''}"
+    # Parse ISO dates up-front so the SQL filter compares Date to Date
+    # (not Date to str, which Postgres+SQLAlchemy can silently misfire on).
+    def _parse(s: str | None) -> _date | None:
+        if not s:
+            return None
+        try:
+            return _date.fromisoformat(s)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400, detail=f"Invalid date '{s}', expected YYYY-MM-DD"
+            ) from exc
+
+    from_d = _parse(from_date)
+    to_d = _parse(to_date)
+
+    cache_key = f"nav:{scheme_code}:{from_d or ''}:{to_d or ''}"
 
     def loader() -> dict[str, Any]:
         stmt = (
@@ -248,10 +265,10 @@ def get_nav_history(
             .where(NavHistory.scheme_code == scheme_code)
             .order_by(NavHistory.nav_date)
         )
-        if from_date:
-            stmt = stmt.where(NavHistory.nav_date >= from_date)
-        if to_date:
-            stmt = stmt.where(NavHistory.nav_date <= to_date)
+        if from_d:
+            stmt = stmt.where(NavHistory.nav_date >= from_d)
+        if to_d:
+            stmt = stmt.where(NavHistory.nav_date <= to_d)
         rows = db.execute(stmt).all()
         return {
             "scheme_code": scheme_code,

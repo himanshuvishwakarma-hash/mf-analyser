@@ -21,10 +21,39 @@ router = APIRouter()
 
 
 def _exclude_direct_plans(stmt):
-    return stmt.where(
-        (Fund.plan_type == "Regular")
-        | ((Fund.plan_type.is_(None)) & (func.lower(Fund.fund_name).not_like("%direct%")))
+    """Restrict the universe shown to advisors.
+
+    Filters:
+      * is_active=True (hides closed / discontinued funds)
+      * plan_type='Regular' OR (plan_type IS NULL AND name has no Direct marker)
+      * category IS NOT NULL (hides stub records with no AMFI category mapping)
+      * Drops common closed-ended patterns: FMP, Fixed Maturity, Series N,
+        Interval Plan, Capital Protection schemes
+    """
+    name = func.lower(Fund.fund_name)
+    closed_patterns = [
+        "%fmp%",
+        "%fixed maturity%",
+        "%series%",
+        "%interval plan%",
+        "%capital protect%",
+    ]
+    stmt = (
+        stmt.where(Fund.is_active.is_(True))
+        .where(Fund.category.is_not(None))
+        .where(
+            (Fund.plan_type == "Regular")
+            | (
+                (Fund.plan_type.is_(None))
+                & ~name.like("%direct%")
+                & ~name.like("%(d)%")
+                & ~name.like("%-direct-%")
+            )
+        )
     )
+    for pat in closed_patterns:
+        stmt = stmt.where(~name.like(pat))
+    return stmt
 
 
 def _serialise_summary(
@@ -94,7 +123,7 @@ def list_funds(
 @router.get("/{scheme_code}", response_model=FundDetail)
 def get_fund(scheme_code: int, db: Session = Depends(get_db)) -> FundDetail:
     fund = db.get(Fund, scheme_code)
-    if fund is None:
+    if fund is None or not fund.is_active:
         raise HTTPException(status_code=404, detail=f"Fund {scheme_code} not found")
 
     latest_nav = db.execute(
@@ -201,7 +230,15 @@ def compare_funds(scheme_codes: list[int], db: Session = Depends(get_db)) -> dic
     if len(scheme_codes) > 5:
         raise HTTPException(status_code=400, detail="At most 5 funds may be compared")
 
-    funds = db.execute(select(Fund).where(Fund.scheme_code.in_(scheme_codes))).scalars().all()
+    funds = (
+        db.execute(
+            select(Fund)
+            .where(Fund.scheme_code.in_(scheme_codes))
+            .where(Fund.is_active.is_(True))
+        )
+        .scalars()
+        .all()
+    )
     if len(funds) != len(scheme_codes):
         missing = sorted(set(scheme_codes) - {f.scheme_code for f in funds})
         raise HTTPException(status_code=404, detail=f"Schemes not found: {missing}")

@@ -285,3 +285,82 @@ def refresh_etf_nav_history(self) -> dict[str, int]:
     }
     logger.info("refresh_etf_nav_history OK: %s", out)
     return out
+
+
+@celery_app.task(name="app.tasks.refresh.deactivate_stale_funds")
+def deactivate_stale_funds(threshold_days: int = 60) -> dict[str, int]:
+    """Flip is_active=False on funds whose NAV history is stale or missing.
+
+    A fund counts as stale if either:
+      * It has no rows in nav_history at all, OR
+      * Its latest nav_date is more than `threshold_days` days old.
+
+    This silently hides closed-ended schemes, matured FMPs, and any
+    discontinued fund whose AMC stopped publishing NAVs. The row stays
+    in the table - we only flip the flag - so historical analysis is
+    preserved.
+    """
+    from datetime import date, timedelta
+
+    from sqlalchemy import func, update
+
+    from app.models.fund import NavHistory  # local import
+
+    cutoff = date.today() - timedelta(days=threshold_days)
+    session = SessionLocal()
+    try:
+        # Subquery: latest NAV date per scheme.
+        latest_subq = (
+            select(NavHistory.scheme_code, func.max(NavHistory.nav_date).label("last_nav"))
+            .group_by(NavHistory.scheme_code)
+            .subquery()
+        )
+
+        # Active funds whose latest NAV is older than cutoff -> deactivate.
+        # Funds with NO NAV rows at all are NOT deactivated - they may just
+        # be waiting for the next NAV backfill cycle.
+        stale_codes = [
+            c
+            for (c,) in session.execute(
+                select(Fund.scheme_code)
+                .join(latest_subq, latest_subq.c.scheme_code == Fund.scheme_code)
+                .where(Fund.is_active.is_(True))
+                .where(latest_subq.c.last_nav < cutoff)
+            ).all()
+        ]
+
+        # Inactive funds whose latest NAV is recent again -> reactivate.
+        # Self-healing: once full NAV backfill catches up, previously-stale
+        # schemes flip back on automatically.
+        revived_codes = [
+            c
+            for (c,) in session.execute(
+                select(Fund.scheme_code)
+                .join(latest_subq, latest_subq.c.scheme_code == Fund.scheme_code)
+                .where(Fund.is_active.is_(False))
+                .where(latest_subq.c.last_nav >= cutoff)
+            ).all()
+        ]
+
+        if stale_codes:
+            session.execute(
+                update(Fund).where(Fund.scheme_code.in_(stale_codes)).values(is_active=False)
+            )
+        if revived_codes:
+            session.execute(
+                update(Fund).where(Fund.scheme_code.in_(revived_codes)).values(is_active=True)
+            )
+        if stale_codes or revived_codes:
+            session.commit()
+        cache.invalidate("funds:")
+        cache.invalidate("categories:")
+    finally:
+        session.close()
+
+    out = {
+        "deactivated": len(stale_codes),
+        "reactivated": len(revived_codes),
+        "threshold_days": threshold_days,
+    }
+    logger.info("deactivate_stale_funds OK: %s", out)
+    return out

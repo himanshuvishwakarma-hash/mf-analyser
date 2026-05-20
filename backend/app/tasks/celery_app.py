@@ -74,4 +74,10 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.refresh.refresh_etf_nav_history",
         "schedule": crontab(hour=HOUR, minute=25),
     },
+    # H.4: deactivate funds with no NAV in 60+ days (closed-ended / discontinued).
+    # Runs nightly at 00:55 IST, right after compute_scores (00:50).
+    "deactivate-stale-funds": {
+        "task": "app.tasks.refresh.deactivate_stale_funds",
+        "schedule": crontab(hour=(HOUR + 1) % 24, minute=55),
+    },
 }

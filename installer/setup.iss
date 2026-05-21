@@ -48,7 +48,7 @@ Source: "assets\z1n.ico";                       DestDir: "{app}\assets"; Flags: 
 Name: "{group}\{#AppName}";              Filename: "{app}\Z1NLauncher.exe"
 Name: "{group}\Open Dashboard";          Filename: "http://localhost:5173"
 Name: "{group}\Uninstall {#AppName}";    Filename: "{uninstallexe}"
-Name: "{commondesktop}\{#AppName}";      Filename: "{app}\Z1NLauncher.exe"; Tasks: desktopicon
+Name: "{userdesktop}\{#AppName}";      Filename: "{app}\Z1NLauncher.exe"; Tasks: desktopicon
 Name: "{userstartup}\{#AppName}";        Filename: "{app}\Z1NLauncher.exe"; Tasks: startupicon
 
 [Run]

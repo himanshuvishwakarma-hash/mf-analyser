@@ -86,6 +86,7 @@ export default function Compare() {
               filenameBase={`comparison_${selected.map((f) => f.scheme_code).join("_")}`}
               label="Export comparison"
               disabled={selected.length === 0}
+              supportsAudience={false}
             />
             <button
               onClick={clear}

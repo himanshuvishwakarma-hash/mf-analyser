@@ -29,9 +29,9 @@ export const fundsApi = {
   score: (schemeCode) => api.get(`/funds/${schemeCode}/score`),
   compare: (codes) => api.post("/funds/compare", codes),
   // Report exports (Phase D) - return blobs for browser download.
-  report: (schemeCode, format = "docx") =>
+  report: (schemeCode, format = "docx", audience = "client") =>
     api.get(`/funds/${schemeCode}/report`, {
-      params: { format },
+      params: { format, audience },
       responseType: "blob",
       timeout: 90000,
     }),

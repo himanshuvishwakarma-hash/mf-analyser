@@ -26,12 +26,6 @@ from sqlalchemy.orm import Session
 
 from app.models.fund import Fund, FundMetric, FundScore, NavHistory
 from app.services.chart_render import render_nav_chart, render_overlay_chart
-from app.services.report_branding import (
-    LOGO_PATH,
-    audience_label,
-    explainer,
-    score_band,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -141,50 +135,6 @@ def _format_num(v, digits: int = 2) -> str:
     return f"{v:.{digits}f}"
 
 
-def _add_logo_header(doc) -> None:
-    """Place Z1N logo at top of header. Falls back to text if file missing."""
-    p = doc.add_paragraph()
-    p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-    if LOGO_PATH.exists():
-        run = p.add_run()
-        run.add_picture(str(LOGO_PATH), width=Cm(3.5))
-    else:
-        run = p.add_run("Z1N CAPITAL")
-        run.font.name = "Arial"
-        run.font.size = Pt(10)
-        run.font.bold = True
-        run.font.color.rgb = BRAND_TEAL
-
-
-def _add_score_panel(doc, score, audience: str) -> None:
-    """Big composite-score number + band label (Strong/Caution/Avoid)."""
-    band, color = score_band(score)
-    p = doc.add_paragraph()
-    if score is None:
-        run = p.add_run("Not yet rated")
-        run.font.name = "Arial"
-        run.font.size = Pt(11)
-        run.font.color.rgb = GREY
-        return
-    big = p.add_run(f"{score:.1f}")
-    big.font.name = "Arial"
-    big.font.size = Pt(28)
-    big.font.bold = True
-    big.font.color.rgb = color
-    p.add_run("  ").font.size = Pt(14)
-    label = p.add_run(band)
-    label.font.name = "Arial"
-    label.font.size = Pt(12)
-    label.font.bold = True
-    label.font.color.rgb = color
-    if audience == "client":
-        _add_para(
-            doc,
-            "Our 0-100 score blends returns, risk, cost, and momentum against peers.",
-            size=9, color=GREY,
-        )
-
-
 # ---- data loaders --------------------------------------------------------
 
 def _load_fund_bundle(session: Session, scheme_code: int) -> dict | None:
@@ -216,16 +166,8 @@ def _load_fund_bundle(session: Session, scheme_code: int) -> dict | None:
 
 # ---- factsheet -----------------------------------------------------------
 
-def build_fund_factsheet(
-    session: Session, scheme_code: int, audience: str = "client"
-) -> bytes:
-    """Build a per-fund factsheet .docx with audience-aware labels.
-
-    audience: 'client' (friendly, default) or 'advisor' (technical + sub-scores).
-    """
-    if audience not in ("client", "advisor"):
-        raise ValueError(f"Invalid audience '{audience}', expected 'client' or 'advisor'")
-
+def build_fund_factsheet(session: Session, scheme_code: int) -> bytes:
+    """Build a per-fund factsheet .docx. Returns raw bytes."""
     bundle = _load_fund_bundle(session, scheme_code)
     if bundle is None:
         raise ValueError(f"Fund {scheme_code} not found")
@@ -235,53 +177,65 @@ def build_fund_factsheet(
     score = bundle["score"]
 
     doc = Document()
+    # Page margins (A4 default in python-docx).
     for section in doc.sections:
         section.top_margin = Cm(2.0)
         section.bottom_margin = Cm(2.0)
         section.left_margin = Cm(2.0)
         section.right_margin = Cm(2.0)
 
-    # Branded header
-    _add_logo_header(doc)
+    # Header strip
+    head = doc.add_paragraph()
+    r = head.add_run("Z1N CAPITAL")
+    r.font.name = "Arial"
+    r.font.size = Pt(10)
+    r.font.bold = True
+    r.font.color.rgb = BRAND_TEAL
     _add_heading(doc, fund.fund_name, size=18)
-    _add_para(
-        doc,
-        f"{fund.amc or '-'} | {fund.category or '-'} | {fund.sub_category or '-'}",
-        size=10, color=GREY,
-    )
+    _add_para(doc, f"{fund.amc or '-'} | {fund.category or '-'} | {fund.sub_category or '-'}",
+              size=10, color=GREY)
 
-    # Snapshot card
+    # Overview key-value
     _add_heading(doc, "Snapshot", size=12)
-    snapshot_rows = [
+    _make_kv_table(doc, [
         ("Latest NAV", f"Rs {bundle['latest_nav']:.4f}" if bundle["latest_nav"] else "-"),
         ("As of", bundle["nav_date"].isoformat() if bundle["nav_date"] else "-"),
-        (
-            audience_label("expense_ratio", audience),
-            f"{fund.expense_ratio:.2f}%" if fund.expense_ratio else "-",
-        ),
-        (audience_label("exit_load", audience), fund.exit_load or "None"),
-        (
-            audience_label("aum_cr", audience),
-            f"{fund.aum_cr:,.0f}" if fund.aum_cr else "-",
-        ),
-    ]
-    if audience == "advisor":
-        snapshot_rows += [
-            ("Plan type", fund.plan_type or "-"),
-            ("AMFI scheme code", str(scheme_code)),
-            (
-                "Expense ratio as of",
-                fund.expense_ratio_as_of.isoformat() if fund.expense_ratio_as_of else "-",
-            ),
-        ]
-    _make_kv_table(doc, snapshot_rows)
+        ("Composite score (0-100)", _format_num(score.composite_score if score else None, 1)),
+        ("Expense ratio (annual)", f"{fund.expense_ratio:.2f}%" if fund.expense_ratio else "-"),
+        ("Exit load", fund.exit_load or "None"),
+        ("AUM (Rs crore)", f"{fund.aum_cr:,.0f}" if fund.aum_cr else "-"),
+        ("Plan type", fund.plan_type or "-"),
+    ])
 
-    # Score panel
-    _add_heading(doc, "Composite score", size=12)
-    _add_score_panel(doc, score.composite_score if score else None, audience)
+    # Returns
+    _add_heading(doc, "Annualised returns", size=12)
+    _make_grid_table(
+        doc,
+        ["1 year", "3 year", "5 year", "10 year"],
+        [[
+            _format_pct(metric.cagr_1y if metric else None),
+            _format_pct(metric.cagr_3y if metric else None),
+            _format_pct(metric.cagr_5y if metric else None),
+            _format_pct(metric.cagr_10y if metric else None),
+        ]],
+    )
 
-    # Advisor: show sub-scores grid
-    if audience == "advisor" and score:
+    # Risk panel
+    _add_heading(doc, "Risk profile", size=12)
+    _make_grid_table(
+        doc,
+        ["Sharpe ratio", "Volatility (std dev)", "Worst drawdown", "Recovery (months)"],
+        [[
+            _format_num(metric.sharpe_ratio if metric else None, 2),
+            _format_pct(metric.std_dev if metric else None, 1),
+            _format_pct(metric.max_drawdown if metric else None, 1),
+            str(metric.recovery_months) if metric and metric.recovery_months else "-",
+        ]],
+    )
+
+    # Score breakdown
+    if score:
+        _add_heading(doc, "Score breakdown", size=12)
         _make_grid_table(
             doc,
             ["Sharpe", "CAGR 1y", "CAGR 3y", "CAGR 5y", "Drawdown", "Expense", "Momentum"],
@@ -296,61 +250,8 @@ def build_fund_factsheet(
             ]],
         )
 
-    # Returns
-    if audience == "client":
-        _add_heading(doc, "What you would have earned", size=12)
-    else:
-        _add_heading(doc, "Annualised returns", size=12)
-    _make_grid_table(
-        doc,
-        [audience_label(k, audience) for k in ("cagr_1y", "cagr_3y", "cagr_5y", "cagr_10y")],
-        [[
-            _format_pct(metric.cagr_1y if metric else None),
-            _format_pct(metric.cagr_3y if metric else None),
-            _format_pct(metric.cagr_5y if metric else None),
-            _format_pct(metric.cagr_10y if metric else None),
-        ]],
-    )
-    if audience == "client":
-        _add_para(
-            doc,
-            "These are annualised returns after fund costs. Past performance does not predict future returns.",
-            size=8, color=GREY,
-        )
-
-    # Risk profile
-    _add_heading(
-        doc,
-        "How wild are the swings?" if audience == "client" else "Risk profile",
-        size=12,
-    )
-    risk_headers = [
-        audience_label(k, audience)
-        for k in ("sharpe_ratio", "std_dev", "max_drawdown",
-                  "drawdown_duration_months", "recovery_months")
-    ]
-    risk_row = [
-        _format_num(metric.sharpe_ratio if metric else None, 2),
-        _format_pct(metric.std_dev if metric else None, 1),
-        _format_pct(metric.max_drawdown if metric else None, 1),
-        str(metric.drawdown_duration_months) + " mo"
-        if metric and metric.drawdown_duration_months else "-",
-        str(metric.recovery_months) + " mo"
-        if metric and metric.recovery_months else "Not yet recovered",
-    ]
-    _make_grid_table(doc, risk_headers, [risk_row])
-    if audience == "client":
-        for key in ("sharpe_ratio", "std_dev", "max_drawdown"):
-            text = explainer(key)
-            if text:
-                _add_para(doc, f"- {text}", size=8, color=GREY)
-
     # NAV chart
-    _add_heading(
-        doc,
-        "Price journey over time" if audience == "client" else "NAV history",
-        size=12,
-    )
+    _add_heading(doc, "NAV history", size=12)
     nav_png = render_nav_chart(
         bundle["nav_history"],
         title="NAV over time",
@@ -358,21 +259,10 @@ def build_fund_factsheet(
     )
     _add_image_bytes(doc, nav_png, width_cm=16.0)
 
-    # Footer
+    # Footer with disclaimer + generation timestamp
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    if audience == "client":
-        _add_para(
-            doc,
-            "Past returns don't guarantee future results. Talk to your advisor before investing.",
-            size=8, color=GREY,
-        )
     _add_para(doc, f"Generated {ts}", size=8, color=GREY)
     _add_footer(doc)
-
-    buf = io.BytesIO()
-    doc.save(buf)
-    return buf.getvalue()
-
 
     buf = io.BytesIO()
     doc.save(buf)

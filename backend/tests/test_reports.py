@@ -108,7 +108,6 @@ def test_factsheet_builds_valid_docx(db_session):
         # Key content present.
         assert "Test Equity Fund" in xml
         assert "Test AMC" in xml
-        assert "Z1N CAPITAL" in xml
         # A return value (18.00% from cagr_1y=0.18)
         assert "18.00%" in xml
 
@@ -217,3 +216,70 @@ def test_compare_report_rejects_bad_format(client, db_session):
         json={"scheme_codes": [1], "format": "rtf"},
     )
     assert resp.status_code == 400
+
+
+# ---- audience-aware factsheet tests (H.7) -------------------------------
+
+def test_factsheet_client_default_hides_subscores(db_session):
+    _seed_fund(db_session)
+    docx_bytes = build_fund_factsheet(db_session, 1)  # default audience
+    with zipfile.ZipFile(io.BytesIO(docx_bytes)) as zf:
+        xml = zf.read("word/document.xml").decode("utf-8")
+        # Client labels present
+        assert "Risk vs reward" in xml or "What you would have earned" in xml
+        # Advisor-only metadata absent
+        assert "AMFI scheme code" not in xml
+        assert "Plan type" not in xml
+
+
+def test_factsheet_advisor_shows_subscores(db_session):
+    _seed_fund(db_session)
+    docx_bytes = build_fund_factsheet(db_session, 1, audience="advisor")
+    with zipfile.ZipFile(io.BytesIO(docx_bytes)) as zf:
+        xml = zf.read("word/document.xml").decode("utf-8")
+        # Technical labels present
+        assert "Sharpe ratio" in xml
+        # Advisor-only metadata appears
+        assert "AMFI scheme code" in xml
+
+
+def test_factsheet_rejects_invalid_audience(db_session):
+    _seed_fund(db_session)
+    import pytest as _p
+    with _p.raises(ValueError, match="Invalid audience"):
+        build_fund_factsheet(db_session, 1, audience="manager")
+
+
+def test_audience_label_mapping():
+    from app.services.report_branding import audience_label
+    assert audience_label("sharpe_ratio", "client") == "Risk vs reward"
+    assert audience_label("sharpe_ratio", "advisor") == "Sharpe ratio"
+    assert audience_label("unknown_key", "client") == "unknown_key"
+
+
+def test_logo_fallback_when_missing(db_session, monkeypatch):
+    """Logo path missing -> factsheet still builds with Z1N CAPITAL text."""
+    from pathlib import Path
+
+    from app.services import report_branding, report_builder
+    fake = Path("/tmp/nonexistent_logo.png")
+    monkeypatch.setattr(report_branding, "LOGO_PATH", fake)
+    monkeypatch.setattr(report_builder, "LOGO_PATH", fake)
+    _seed_fund(db_session)
+    docx_bytes = build_fund_factsheet(db_session, 1)
+    with zipfile.ZipFile(io.BytesIO(docx_bytes)) as zf:
+        xml = zf.read("word/document.xml").decode("utf-8")
+        assert "Z1N CAPITAL" in xml
+
+
+def test_report_endpoint_accepts_audience(client, db_session):
+    _seed_fund(db_session)
+    resp = client.get("/api/v1/funds/1/report?format=docx&audience=advisor")
+    assert resp.status_code == 200
+    assert resp.content[:2] == b"PK"
+
+
+def test_report_endpoint_rejects_bad_audience(client, db_session):
+    _seed_fund(db_session)
+    resp = client.get("/api/v1/funds/1/report?format=docx&audience=manager")
+    assert resp.status_code == 422

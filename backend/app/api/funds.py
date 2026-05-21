@@ -350,11 +350,12 @@ def _stream_pdf(data: bytes, filename: str) -> StreamingResponse:
 def fund_report(
     scheme_code: int,
     format: str = Query("docx", pattern="^(docx|pdf)$"),
+    audience: str = Query("client", pattern="^(client|advisor)$"),
     db: Session = Depends(get_db),
 ):
-    """Generate a per-fund factsheet as .docx or .pdf."""
+    """Generate a per-fund factsheet as .docx or .pdf. audience=client|advisor."""
     try:
-        docx_bytes = build_fund_factsheet(db, scheme_code)
+        docx_bytes = build_fund_factsheet(db, scheme_code, audience=audience)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

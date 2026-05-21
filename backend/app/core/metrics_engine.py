@@ -125,10 +125,23 @@ def recompute_all_fund_metrics(
     session: Session, limit: int | None = None
 ) -> dict[str, int]:
     """Loop over every Regular-plan fund that has any NAV history and refresh metrics."""
+    # Match the API universe filter so every visible fund gets metrics:
+    # explicit Regular plan OR plan_type IS NULL where name has no Direct marker.
+    from sqlalchemy import func, or_
+    name_lower = func.lower(Fund.fund_name)
     stmt = (
         select(Fund.scheme_code)
         .where(Fund.is_active.is_(True))
-        .where(Fund.plan_type == "Regular")
+        .where(Fund.category.is_not(None))
+        .where(
+            or_(
+                Fund.plan_type == "Regular",
+                (Fund.plan_type.is_(None))
+                & ~name_lower.like("%direct%")
+                & ~name_lower.like("%(d)%")
+                & ~name_lower.like("%-direct-%"),
+            )
+        )
         .order_by(Fund.scheme_code)
     )
     codes = [c for (c,) in session.execute(stmt).all()]

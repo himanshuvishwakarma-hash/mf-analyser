@@ -23,7 +23,7 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.models.fund import CategoryBenchmark, Fund, FundMetric, FundScore
@@ -126,7 +126,15 @@ def _build_category_populations(
         select(Fund, FundMetric)
         .join(FundMetric, FundMetric.scheme_code == Fund.scheme_code)
         .where(Fund.is_active.is_(True))
-        .where(Fund.plan_type == "Regular")
+        .where(
+            (Fund.plan_type == "Regular")
+            | (
+                (Fund.plan_type.is_(None))
+                & ~func.lower(Fund.fund_name).like("%direct%")
+                & ~func.lower(Fund.fund_name).like("%(d)%")
+                & ~func.lower(Fund.fund_name).like("%-direct-%")
+            )
+        )
     ).all()
 
     by_cat: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
@@ -253,7 +261,15 @@ def recompute_all_scores(session: Session) -> dict[str, int]:
         select(Fund, FundMetric)
         .join(FundMetric, FundMetric.scheme_code == Fund.scheme_code)
         .where(Fund.is_active.is_(True))
-        .where(Fund.plan_type == "Regular")
+        .where(
+            (Fund.plan_type == "Regular")
+            | (
+                (Fund.plan_type.is_(None))
+                & ~func.lower(Fund.fund_name).like("%direct%")
+                & ~func.lower(Fund.fund_name).like("%(d)%")
+                & ~func.lower(Fund.fund_name).like("%-direct-%")
+            )
+        )
     ).all()
 
     # Wipe previous scores to keep one row per scheme_code (spec keeps history;

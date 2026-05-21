@@ -60,7 +60,8 @@ def test_enrich_does_not_overwrite_existing_category(db_session):
     assert db_session.get(Fund, 101).category == "Hybrid"
 
 
-def test_enrich_deactivates_close_ended(db_session):
+def test_enrich_deactivates_close_ended_only_when_flag(db_session):
+    """CLOSE-ended funds stay active by default; opt-in via flag."""
     db_session.add(Fund(scheme_code=102, fund_name="FMP", category="Debt", is_active=True))
     db_session.commit()
     df = pd.DataFrame(
@@ -74,7 +75,13 @@ def test_enrich_deactivates_close_ended(db_session):
             }
         ]
     )
+    # Default: leave close-ended active.
     result = enrich_funds(db_session, df)
+    assert result["deactivated_close_ended"] == 0
+    assert db_session.get(Fund, 102).is_active is True
+
+    # Opt-in: flag flips them off.
+    result = enrich_funds(db_session, df, deactivate_close_ended=True)
     assert result["deactivated_close_ended"] == 1
     db_session.expire_all()
     assert db_session.get(Fund, 102).is_active is False

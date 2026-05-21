@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import sys
 from pathlib import Path
 
 import pandas as pd
@@ -74,7 +73,11 @@ def load_xls(path: Path) -> pd.DataFrame:
 
 
 def enrich_funds(
-    session: Session, df: pd.DataFrame, *, dry_run: bool = False
+    session: Session,
+    df: pd.DataFrame,
+    *,
+    dry_run: bool = False,
+    deactivate_close_ended: bool = False,
 ) -> dict[str, int]:
     """Update funds rows with category + is_active from NSE master."""
     # Keep only rows with an AMFI code that we can map back to funds.scheme_code.
@@ -106,10 +109,10 @@ def enrich_funds(
             fund.category = cat
             updated_category += 1
 
-        # Deactivate close-ended FMPs explicitly (the H.4 nightly task only
-        # touches funds with stale NAVs; this catches closed-ended schemes
-        # that may still publish NAVs but should be hidden from advisors).
-        if is_close and fund.is_active:
+        # Optionally deactivate close-ended FMPs. Off by default so advisors
+        # can still see + recommend FMPs (some Z1N clients allocate to them).
+        # Pass --deactivate-close-ended to hide them.
+        if is_close and fund.is_active and deactivate_close_ended:
             fund.is_active = False
             closed_ended_deactivated += 1
         elif (not is_status_active) and fund.is_active:
@@ -142,6 +145,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "--dry-run", action="store_true", help="Show effect without committing"
     )
+    p.add_argument(
+        "--deactivate-close-ended",
+        action="store_true",
+        help="Also flip is_active=False on CLOSE-ended (FMP/closed-ended) schemes. "
+        "Default: leave them active so advisors can still see + recommend them.",
+    )
     args = p.parse_args(argv)
 
     if not args.xls_path.exists():
@@ -153,7 +162,12 @@ def main(argv: list[str] | None = None) -> int:
 
     session = SessionLocal()
     try:
-        result = enrich_funds(session, df, dry_run=args.dry_run)
+        result = enrich_funds(
+            session,
+            df,
+            dry_run=args.dry_run,
+            deactivate_close_ended=args.deactivate_close_ended,
+        )
     finally:
         session.close()
 

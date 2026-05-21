@@ -47,7 +47,14 @@ APP_DATA = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / ".z1n"))) / "Z1
 APP_DATA.mkdir(parents=True, exist_ok=True)
 STATE_FILE = APP_DATA / "state.json"
 LOG_FILE = APP_DATA / "launcher.log"
-COMPOSE_DIR = Path(__file__).resolve().parent.parent / "payload"
+# Resolve the bundled compose dir. When frozen by PyInstaller, __file__ points
+# inside the temp extraction dir, NOT the install location. Use sys.executable.
+if getattr(sys, "frozen", False):
+    # Running from PyInstaller .exe -> Z1NLauncher.exe lives in {app}, payload at {app}/payload
+    COMPOSE_DIR = Path(sys.executable).resolve().parent / "payload"
+else:
+    # Dev mode: launcher.py is at installer/tray_launcher/launcher.py, payload at installer/payload
+    COMPOSE_DIR = Path(__file__).resolve().parent.parent / "payload"
 
 logging.basicConfig(
     filename=LOG_FILE,

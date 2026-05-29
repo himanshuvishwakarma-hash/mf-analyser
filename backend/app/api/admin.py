@@ -115,3 +115,13 @@ def run_cascade_now(
             "compute_scores": scores.id,
         },
     }
+
+
+@router.post("/refresh-universe")
+def refresh_universe_now(
+    _auth: None = Depends(_require_admin),
+) -> dict[str, object]:
+    """v3.3A: trigger AMFI universe refresh immediately."""
+    from app.tasks import refresh as refresh_tasks
+    task = refresh_tasks.refresh_universe.delay()
+    return {"dispatched": True, "task_id": task.id}

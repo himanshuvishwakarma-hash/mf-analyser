@@ -60,6 +60,12 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.refresh.compute_scores",
         "schedule": crontab(hour=(HOUR + 1) % 24, minute=50),
     },
+    # v3.3A: AMFI scheme master refresh nightly at 22:55 IST (5 min before legacy
+    # fund_master task) so newer authoritative category + plan_type values land first.
+    "nightly-amfi-master": {
+        "task": "app.tasks.refresh.refresh_universe",
+        "schedule": crontab(hour=HOUR, minute=55) if (False) else crontab(hour=22, minute=55),
+    },
     # ETF live quotes via Yahoo: every 5 min during NSE hours (Mon-Fri 09:15-15:30 IST).
     # The task itself re-checks is_market_open() as a defensive gate.
     "etf-live-quotes": {

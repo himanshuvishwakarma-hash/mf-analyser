@@ -40,22 +40,23 @@ def test_inactive_fund_excluded_from_compare(client, db_session):
     assert resp.status_code == 404  # scheme 2 missing from filtered set
 
 
-def test_direct_plan_excluded_by_name_pattern(client, db_session):
+def test_direct_plan_excluded_by_plan_type(client, db_session):
+    """v3.3A: filter uses authoritative plan_type, not name heuristics."""
     db_session.add_all(
         [
             Fund(scheme_code=1, fund_name="Foo Fund - Regular Plan",
-                 plan_type=None, category="Equity", is_active=True),
+                 plan_type="Regular", category="Equity", is_active=True),
             Fund(scheme_code=2, fund_name="Foo Fund - Direct Plan",
+                 plan_type="Direct", category="Equity", is_active=True),
+            Fund(scheme_code=3, fund_name="Foo Fund - No Plan Tag",
                  plan_type=None, category="Equity", is_active=True),
-            Fund(scheme_code=3, fund_name="Foo Fund (D) Growth",
-                 plan_type=None, is_active=True),
         ]
     )
     db_session.commit()
     resp = client.get("/api/v1/funds/list?limit=10")
     codes = {f["scheme_code"] for f in resp.json()["items"]}
+    # Only explicit Regular shows up; plan_type=None is now excluded.
     assert codes == {1}
-
 
 def test_deactivate_stale_funds_flips_old_funds(db_session, monkeypatch):
     today = date.today()

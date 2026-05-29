@@ -21,39 +21,16 @@ router = APIRouter()
 
 
 def _exclude_direct_plans(stmt):
-    """Restrict the universe shown to advisors.
+    """Restrict universe to active Regular plans with a populated category.
 
-    Filters:
-      * is_active=True (hides closed / discontinued funds)
-      * plan_type='Regular' OR (plan_type IS NULL AND name has no Direct marker)
-      * category IS NOT NULL (hides stub records with no AMFI category mapping)
-      * Drops common closed-ended patterns: FMP, Fixed Maturity, Series N,
-        Interval Plan, Capital Protection schemes
+    v3.3A: plan_type now comes from AMFI master and is authoritative -
+    no name-pattern heuristics needed.
     """
-    name = func.lower(Fund.fund_name)
-    closed_patterns = [
-        "%fmp%",
-        "%fixed maturity%",
-        "%series%",
-        "%interval plan%",
-        "%capital protect%",
-    ]
-    stmt = (
+    return (
         stmt.where(Fund.is_active.is_(True))
         .where(Fund.category.is_not(None))
-        .where(
-            (Fund.plan_type == "Regular")
-            | (
-                (Fund.plan_type.is_(None))
-                & ~name.like("%direct%")
-                & ~name.like("%(d)%")
-                & ~name.like("%-direct-%")
-            )
-        )
+        .where(Fund.plan_type == "Regular")
     )
-    for pat in closed_patterns:
-        stmt = stmt.where(~name.like(pat))
-    return stmt
 
 
 # Frontend button labels -> DB filters. AMFI taxonomy splits ETFs and Index

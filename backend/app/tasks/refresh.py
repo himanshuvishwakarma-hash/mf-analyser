@@ -202,17 +202,16 @@ def compute_scores() -> dict[str, int]:
 
 @celery_app.task(name="app.tasks.refresh.refresh_etf_quotes", bind=True, max_retries=2)
 def refresh_etf_quotes(self, force: bool = False) -> dict[str, int | bool]:
-    """Pull live ETF quotes from Yahoo into etf_quotes.
-
-    Skipped outside NSE trading hours unless force=True. Beat schedules this
-    every 5 min during 09:15-15:30 IST Mon-Fri (gate is defensive).
-    """
+    """Pull live ETF quotes - NSE primary, Yahoo fallback after 3 fails (v3.3A)."""
     if not force and not is_market_open():
         logger.info("refresh_etf_quotes: market closed, skip")
         return {"skipped": True, "reason": "market_closed"}
+
+    from app.services.sources import nse_quote_fetcher
+
     session = SessionLocal()
     try:
-        result = run_yahoo_refresh(session)
+        result = asyncio.run(_run_etf_refresh(session, nse_quote_fetcher))
     except Exception as exc:
         logger.exception("refresh_etf_quotes failed")
         raise self.retry(exc=exc, countdown=60 * 2) from exc
@@ -220,6 +219,62 @@ def refresh_etf_quotes(self, force: bool = False) -> dict[str, int | bool]:
         session.close()
     logger.info("refresh_etf_quotes OK: %s", result)
     return {**result, "skipped": False}
+
+
+async def _run_etf_refresh(session, nse) -> dict[str, int | str]:
+    """NSE first; on 3 consecutive failures, cascade to Yahoo for the rest."""
+    from sqlalchemy import select
+
+    from app.models.fund import EtfQuote
+
+    rows = session.execute(
+        select(EtfQuote.scheme_code, EtfQuote.symbol_yahoo)
+    ).all()
+    tracker = nse.FailoverTracker()
+    written = 0
+    succeeded = 0
+    failed = 0
+    used_yahoo = False
+
+    for scheme_code, yahoo_symbol in rows:
+        if tracker.should_failover():
+            used_yahoo = True
+            break
+        nse_symbol = (yahoo_symbol or "").replace(".NS", "")
+        if not nse_symbol:
+            continue
+        quote = await nse.fetch_quote(nse_symbol)
+        if quote is None:
+            tracker.record_failure()
+            failed += 1
+            continue
+        tracker.record_success()
+        succeeded += 1
+        existing = session.get(EtfQuote, scheme_code)
+        if existing is not None:
+            existing.last_price = quote.last_price
+            existing.prev_close = quote.prev_close
+            existing.day_change_pct = quote.day_change_pct
+            existing.last_traded_at = quote.last_traded_at
+            existing.source = "nse"
+            written += 1
+    session.commit()
+
+    if used_yahoo:
+        logger.warning("NSE failed %d consecutive times - cascading to Yahoo", tracker.THRESHOLD)
+        yahoo_result = run_yahoo_refresh(session)
+        return {
+            "primary": "nse+yahoo",
+            "nse_succeeded": succeeded,
+            "nse_failed": failed,
+            "rows_written": written + yahoo_result.get("rows_written", 0),
+        }
+    return {
+        "primary": "nse",
+        "nse_succeeded": succeeded,
+        "nse_failed": failed,
+        "rows_written": written,
+    }
 
 
 @celery_app.task(name="app.tasks.refresh.refresh_expense_ratios", bind=True, max_retries=2)
@@ -364,3 +419,24 @@ def deactivate_stale_funds(threshold_days: int = 60) -> dict[str, int]:
     }
     logger.info("deactivate_stale_funds OK: %s", out)
     return out
+
+
+@celery_app.task(name="app.tasks.refresh.refresh_universe", bind=True, max_retries=3)
+def refresh_universe(self) -> dict[str, int]:
+    """v3.3A: Pull AMFI NAVAll, upsert funds with authoritative category + plan_type."""
+    from app.services.sources import amfi_master
+    from app.services.universe_loader import apply_amfi_master
+
+    try:
+        rows = asyncio.run(amfi_master.fetch_navall())
+    except Exception as exc:
+        logger.exception("refresh_universe: AMFI fetch failed")
+        raise self.retry(exc=exc, countdown=60 * 10) from exc
+
+    session = SessionLocal()
+    try:
+        result = apply_amfi_master(session, rows)
+    finally:
+        session.close()
+    logger.info("refresh_universe OK: %s", result)
+    return result

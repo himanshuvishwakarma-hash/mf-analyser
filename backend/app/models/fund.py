@@ -24,6 +24,7 @@ class Fund(Base):
     expense_ratio_as_of: Mapped["date | None"] = mapped_column(Date, nullable=True)
     aum_cr: Mapped[float | None] = mapped_column(Float, nullable=True)
     is_active: Mapped[bool] = mapped_column(default=True, nullable=False)
+    source: Mapped[str | None] = mapped_column(String(32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 

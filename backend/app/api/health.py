@@ -110,9 +110,16 @@ def health_deep(db: Session = Depends(get_db)) -> dict[str, Any]:
     latest_etf_dt = db.scalar(select(func.max(EtfQuote.updated_at)))
     etf_age_h = _hours_since(latest_etf_dt) if latest_etf_dt else None
     etf_status = "ok"
+    # Weekend-aware threshold: NSE closed Sat+Sun, so Sat morning age is
+    # already ~18h+ since Fri 15:30 IST close. Use 96h on Sat/Sun to cover.
+    # IST = UTC+5:30; compute IST weekday for fairness.
+    from datetime import timedelta
+    ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+    is_weekend = ist_now.weekday() >= 5  # 5=Sat, 6=Sun
+    threshold_h = 96 if is_weekend else 24
     if etf_count == 0:
         etf_status = "unknown"  # no ETFs configured = neutral
-    elif etf_age_h is None or etf_age_h > 24:
+    elif etf_age_h is None or etf_age_h > threshold_h:
         etf_status = "warn"
     checks["etf_quotes"] = {
         "status": etf_status,

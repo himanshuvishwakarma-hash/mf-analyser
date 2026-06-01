@@ -29,7 +29,7 @@ services:
       retries: 5
 
   backend:
-    image: ghcr.io/himanshuvishwakarma-hash/mf-analyser-backend:${APP_VERSION:-2.0.0}
+    image: ghcr.io/himanshuvishwakarma-hash/mf-analyser-backend:${APP_VERSION:-latest}
     container_name: z1n_mf_backend
     restart: unless-stopped
     depends_on:
@@ -46,7 +46,7 @@ services:
       - "8000:8000"
 
   worker:
-    image: ghcr.io/himanshuvishwakarma-hash/mf-analyser-backend:${APP_VERSION:-2.0.0}
+    image: ghcr.io/himanshuvishwakarma-hash/mf-analyser-backend:${APP_VERSION:-latest}
     container_name: z1n_mf_worker
     restart: unless-stopped
     depends_on:
@@ -58,7 +58,7 @@ services:
       CELERY_SCHEDULE_HOUR: "23"
 
   frontend:
-    image: ghcr.io/himanshuvishwakarma-hash/mf-analyser-frontend:${APP_VERSION:-2.0.0}
+    image: ghcr.io/himanshuvishwakarma-hash/mf-analyser-frontend:${APP_VERSION:-latest}
     container_name: z1n_mf_frontend
     restart: unless-stopped
     depends_on:

@@ -38,10 +38,15 @@ except ImportError:  # pragma: no cover
     requests = None
 
 APP_NAME = "Z1N MF Analyser"
-APP_VERSION = "2.0.0"
+APP_VERSION = "3.0.4"  # bumped by CI from git tag
 DASHBOARD_URL = "http://localhost:5173"
+BACKEND_HEALTH_URL = "http://localhost:8000/api/v1/health"
 UPDATE_FEED_URL = "https://releases.z1ncapital.in/version.json"
 UPDATE_CHECK_INTERVAL_SEC = 7 * 24 * 60 * 60  # weekly
+DOCKER_DOWNLOAD_URL = "https://www.docker.com/products/docker-desktop/"
+# How long to wait for backend to come up before giving up + opening browser anyway.
+BACKEND_READY_TIMEOUT_SEC = 5 * 60
+BACKEND_POLL_INTERVAL_SEC = 3
 
 APP_DATA = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / ".z1n"))) / "Z1NMFAnalyser"
 APP_DATA.mkdir(parents=True, exist_ok=True)
@@ -112,6 +117,25 @@ def stack_down() -> None:
 def stack_logs(n: int = 200) -> str:
     r = _run_compose(["logs", "--tail", str(n), "backend"], timeout=30)
     return r.stdout or r.stderr
+
+
+def wait_for_backend(timeout_sec: int = BACKEND_READY_TIMEOUT_SEC) -> bool:
+    """Poll the backend /health endpoint until it returns 200 or timeout."""
+    if requests is None:
+        logger.warning("requests not installed; skipping backend health wait")
+        return False
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline:
+        try:
+            r = requests.get(BACKEND_HEALTH_URL, timeout=2)
+            if r.status_code == 200:
+                logger.info("backend healthy after %.1fs", timeout_sec - (deadline - time.time()))
+                return True
+        except requests.RequestException:
+            pass
+        time.sleep(BACKEND_POLL_INTERVAL_SEC)
+    logger.warning("backend health timeout after %ds", timeout_sec)
+    return False
 
 
 # ---- update check -------------------------------------------------------
@@ -243,21 +267,78 @@ def maybe_run_wizard() -> bool:
 
 # ---- main ----------------------------------------------------------------
 
+def _show_docker_missing_dialog() -> None:
+    """Friendly error with a one-click install option for non-tech users."""
+    try:
+        import tkinter as tk
+        import tkinter.messagebox as mb
+
+        # Use askyesno so the dialog offers a real action button, not just OK.
+        root = tk.Tk()
+        root.withdraw()
+        do_install = mb.askyesno(
+            APP_NAME,
+            "Docker Desktop is required to run " + APP_NAME + ", but it is not "
+            "running on your computer.\n\n"
+            "Click YES to open the Docker Desktop download page in your browser.\n"
+            "Click NO if Docker is already installed - just start it from your "
+            "Start menu and re-launch " + APP_NAME + ".",
+        )
+        if do_install:
+            webbrowser.open(DOCKER_DOWNLOAD_URL)
+        root.destroy()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _show_stack_failed_dialog() -> None:
+    try:
+        import tkinter as tk
+        import tkinter.messagebox as mb
+
+        root = tk.Tk()
+        root.withdraw()
+        mb.showerror(
+            APP_NAME,
+            "Could not start " + APP_NAME + ".\n\n"
+            "Most common fixes:\n"
+            "1. Make sure Docker Desktop is fully started (the whale icon in your "
+            "system tray should be steady, not animating).\n"
+            "2. Right-click the Z tray icon and choose Restart Backend.\n"
+            "3. Restart your computer and try again.\n\n"
+            "If the problem keeps happening, send the file launcher.log "
+            "from " + str(APP_DATA) + " to Himanshu.",
+        )
+        root.destroy()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _post_start_open_browser(icon) -> None:
+    """Background: wait for backend health, then open browser. Non-blocking."""
+    icon.notify(
+        "Starting the data service... your browser will open automatically when ready.",
+        APP_NAME,
+    )
+    ok = wait_for_backend()
+    if ok:
+        icon.notify(f"{APP_NAME} is ready.", APP_NAME)
+    else:
+        icon.notify(
+            "Data service is still starting. Try the dashboard in a minute.",
+            APP_NAME,
+        )
+    # Open browser regardless - if backend isn't up, the page itself will show
+    # a polite "loading" state from the frontend's first-boot modal.
+    webbrowser.open(DASHBOARD_URL)
+
+
 def main() -> int:
     logger.info("=== %s v%s launcher starting ===", APP_NAME, APP_VERSION)
 
     if not docker_available():
         logger.error("Docker Desktop not running")
-        # Show a simple message via tk and exit; user can install / start Docker.
-        try:
-            import tkinter.messagebox as mb
-            mb.showerror(
-                APP_NAME,
-                "Docker Desktop is not running. Please start it and re-launch "
-                f"{APP_NAME}.",
-            )
-        except Exception:
-            pass
+        _show_docker_missing_dialog()
         return 2
 
     if not maybe_run_wizard():
@@ -265,15 +346,7 @@ def main() -> int:
         return 1
 
     if not stack_up():
-        try:
-            import tkinter.messagebox as mb
-            mb.showerror(
-                APP_NAME,
-                "Could not start the backend stack. See launcher.log in "
-                f"{APP_DATA}.",
-            )
-        except Exception:
-            pass
+        _show_stack_failed_dialog()
         return 3
 
     icon = pystray.Icon(
@@ -283,8 +356,9 @@ def main() -> int:
         menu=build_menu(),
     )
 
+    # Auto-open browser once backend is healthy.
+    threading.Thread(target=_post_start_open_browser, args=(icon,), daemon=True).start()
     threading.Thread(target=update_loop, args=(icon,), daemon=True).start()
-    icon.notify(f"{APP_NAME} is running. Right-click for menu.", APP_NAME)
     icon.run()
     return 0
 

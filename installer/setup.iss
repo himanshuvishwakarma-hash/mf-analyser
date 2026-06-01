@@ -52,7 +52,13 @@ Name: "{userdesktop}\{#AppName}";      Filename: "{app}\Z1NLauncher.exe"; Tasks:
 Name: "{userstartup}\{#AppName}";        Filename: "{app}\Z1NLauncher.exe"; Tasks: startupicon
 
 [Run]
-; Optional final step: launch the tray app right after install.
+; Pre-pull Docker images so first launch is instant (vs 5-10 min download).
+; Best-effort: if Docker is not running yet, the launcher will pull on first start.
+Filename: "{cmd}"; Parameters: "/c docker compose -f ""{app}\payload\docker-compose.yml"" pull"; \
+  Description: "Pre-download data service images (about 5 minutes)"; \
+  StatusMsg: "Downloading data service images... (one-time, takes about 5 minutes)"; \
+  Flags: runhidden waituntilterminated
+; Final step: launch the tray app right after install.
 Filename: "{app}\Z1NLauncher.exe"; Description: "Launch {#AppName}"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]

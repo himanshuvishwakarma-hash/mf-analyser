@@ -91,9 +91,8 @@ end;
 procedure CreateUserEnvIfMissing;
 var
   Src, Dest: string;
-  Lines: TArrayOfString;
-  Out: TArrayOfString;
-  I, OutLen: Integer;
+  Lines, Filtered: TArrayOfString;
+  I, NewLen: Integer;
   Trimmed: string;
 begin
   Src  := ExpandConstant('{app}\payload\.env.template');
@@ -106,22 +105,18 @@ begin
   // (which no longer exists on GHCR). Strip any non-comment APP_VERSION line
   // so compose's :latest default kicks in.
   if LoadStringsFromFile(Dest, Lines) then begin
-    SetArrayLength(Out, 0);
-    OutLen := 0;
+    NewLen := 0;
+    SetArrayLength(Filtered, 0);
     for I := 0 to GetArrayLength(Lines) - 1 do begin
       Trimmed := Trim(Lines[I]);
-      if (Copy(Trimmed, 1, 12) = 'APP_VERSION=') then begin
-        // Replace with commented note so the file is self-documenting.
-        SetArrayLength(Out, OutLen + 1);
-        Out[OutLen] := '# APP_VERSION was removed by installer upgrade (defaults to :latest)';
-        OutLen := OutLen + 1;
-      end else begin
-        SetArrayLength(Out, OutLen + 1);
-        Out[OutLen] := Lines[I];
-        OutLen := OutLen + 1;
-      end;
+      SetArrayLength(Filtered, NewLen + 1);
+      if Copy(Trimmed, 1, 12) = 'APP_VERSION=' then
+        Filtered[NewLen] := '# APP_VERSION removed by installer upgrade (defaults to :latest)'
+      else
+        Filtered[NewLen] := Lines[I];
+      NewLen := NewLen + 1;
     end;
-    SaveStringsToFile(Dest, Out, False);
+    SaveStringsToFile(Dest, Filtered, False);
   end;
 end;
 

@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -141,14 +141,19 @@ def upsert_funds(
                     "plan_type": stmt.excluded.plan_type,
                     "is_active": stmt.excluded.is_active,
                 }
+            # COALESCE: keep existing AMFI-authored values when mfapi sends NULL.
+            # mfapi's list endpoint returns NULL for amc/category/sub_category/plan_type
+            # unless populate_meta=True (which is off by default), so without coalesce
+            # we'd nightly wipe everything that refresh_universe set at 22:55.
+            fund_tbl = Fund.__table__
             stmt = stmt.on_conflict_do_update(
                 index_elements=["scheme_code"],
                 set_={
                     "fund_name": stmt.excluded.fund_name,
-                    "amc": stmt.excluded.amc,
-                    "category": stmt.excluded.category,
-                    "sub_category": stmt.excluded.sub_category,
-                    "plan_type": stmt.excluded.plan_type,
+                    "amc": func.coalesce(stmt.excluded.amc, fund_tbl.c.amc),
+                    "category": func.coalesce(stmt.excluded.category, fund_tbl.c.category),
+                    "sub_category": func.coalesce(stmt.excluded.sub_category, fund_tbl.c.sub_category),
+                    "plan_type": func.coalesce(stmt.excluded.plan_type, fund_tbl.c.plan_type),
                     "is_active": stmt.excluded.is_active,
                 },
             )
@@ -163,6 +168,9 @@ def upsert_funds(
         counts.inserted = total
     else:
         # SQLite (used in tests) - row-by-row merge.
+        # Same COALESCE semantics as Postgres path: don't wipe non-NULL existing
+        # values with NULL replacements (parity with refresh_universe behaviour).
+        _PRESERVE_IF_NULL = {"amc", "category", "sub_category", "plan_type"}
         for row in rows:
             existing = session.get(Fund, row["scheme_code"])
             if existing is None:
@@ -170,6 +178,8 @@ def upsert_funds(
                 counts.inserted += 1
             else:
                 for k, v in row.items():
+                    if k in _PRESERVE_IF_NULL and v is None:
+                        continue
                     setattr(existing, k, v)
                 counts.updated += 1
         session.commit()

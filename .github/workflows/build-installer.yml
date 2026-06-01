@@ -37,6 +37,15 @@ jobs:
       - name: Install Inno Setup
         run: choco install innosetup --no-progress -y
 
+      - name: Inject AppVersion from git tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}".TrimStart('v')
+          $iss = "installer/setup.iss"
+          (Get-Content $iss) -replace '#define AppVersion\s+".*"', "#define AppVersion    `"$tag`"" | Set-Content $iss
+          Get-Content $iss | Select-String "AppVersion"
+
       - name: Compile installer
         working-directory: installer
         run: |

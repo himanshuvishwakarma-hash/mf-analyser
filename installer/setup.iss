@@ -4,7 +4,7 @@
 
 #define AppName       "Z1N MF Analyser"
 #define AppShortName  "Z1NMFAnalyser"
-#define AppVersion    "3.0.0"
+#define AppVersion    "3.0.1"
 #define AppPublisher  "Z1N Capital"
 #define AppURL        "https://z1ncapital.in"
 

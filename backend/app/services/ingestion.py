@@ -27,6 +27,10 @@ logger = logging.getLogger(__name__)
 _FUND_BATCH_SIZE = 1000
 # NavHistory has 3 columns; cap at 5000 rows per batch (= 15,000 params, safe).
 _NAV_BATCH_SIZE = 5000
+# Columns preserved when an upsert sends NULL (don't wipe AMFI-authored values
+# with empty mfapi metadata). Mirrors the Postgres path's COALESCE behaviour
+# so the SQLite test path keeps parity.
+_PRESERVE_IF_NULL_COLS = frozenset({"amc", "category", "sub_category", "plan_type"})
 
 
 # Parsers ---------------------------------------------------------------------
@@ -167,10 +171,7 @@ def upsert_funds(
             )
         counts.inserted = total
     else:
-        # SQLite (used in tests) - row-by-row merge.
-        # Same COALESCE semantics as Postgres path: don't wipe non-NULL existing
-        # values with NULL replacements (parity with refresh_universe behaviour).
-        _PRESERVE_IF_NULL = {"amc", "category", "sub_category", "plan_type"}
+        # SQLite (used in tests) - row-by-row merge with COALESCE parity.
         for row in rows:
             existing = session.get(Fund, row["scheme_code"])
             if existing is None:
@@ -178,7 +179,7 @@ def upsert_funds(
                 counts.inserted += 1
             else:
                 for k, v in row.items():
-                    if k in _PRESERVE_IF_NULL and v is None:
+                    if k in _PRESERVE_IF_NULL_COLS and v is None:
                         continue
                     setattr(existing, k, v)
                 counts.updated += 1

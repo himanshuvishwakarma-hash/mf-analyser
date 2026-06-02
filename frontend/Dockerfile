@@ -6,7 +6,9 @@ FROM node:20-alpine AS builder
 WORKDIR /app
 
 COPY package.json package-lock.json* ./
-RUN npm ci
+# npm install (not ci) because package-lock.json isn't committed.
+# Falls back gracefully when lockfile absent.
+RUN npm install
 
 COPY . .
 # VITE_API_BASE_URL is baked into the static bundle at build time.

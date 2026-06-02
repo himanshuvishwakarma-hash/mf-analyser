@@ -41,7 +41,7 @@ Name: "startupicon";  Description: "Start {#AppName} when Windows starts"; Group
 Source: "tray_launcher\dist\Z1NLauncher.exe"; DestDir: "{app}"; Flags: ignoreversion overwritereadonly
 ; docker-compose.yml MUST be force-overwritten on every install — old installs
 ; left stale port mappings that broke the frontend until manually patched.
-Source: "payload\docker-compose.yml";          DestDir: "{app}\payload"; Flags: ignoreversion overwritereadonly replacesameversion
+Source: "payload\docker-compose.yml";          DestDir: "{app}\payload"; Flags: ignoreversion overwritereadonly
 Source: "payload\.env.template";               DestDir: "{app}\payload"; Flags: ignoreversion overwritereadonly; AfterInstall: CreateUserEnvIfMissing
 Source: "payload\README.txt";                  DestDir: "{app}\payload"; Flags: ignoreversion overwritereadonly
 Source: "assets\z1n.ico";                       DestDir: "{app}\assets"; Flags: ignoreversion overwritereadonly skipifsourcedoesntexist

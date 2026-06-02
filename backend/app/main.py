@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 
 import sentry_sdk
+from celery import chain
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func, select
@@ -12,6 +13,7 @@ from app.api import admin, calculator, categories, funds, health, scores
 from app.config import get_settings
 from app.db import SessionLocal
 from app.models.fund import Fund
+from app.tasks import refresh as refresh_tasks
 
 settings = get_settings()
 
@@ -66,8 +68,6 @@ def first_boot_seed_check() -> None:
             logger.info("first_boot_seed_check: funds table has %d rows, skip", n)
             return
         logger.info("first_boot_seed_check: funds table empty, dispatching seed cascade")
-        from celery import chain
-        from app.tasks import refresh as refresh_tasks
 
         # Sequence matters: each step needs the previous one's output.
         # Use Celery chain so worker runs them in order, not in parallel.

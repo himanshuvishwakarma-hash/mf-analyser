@@ -21,4 +21,6 @@ COPY . .
 
 EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Wait for Postgres, run migrations, then start uvicorn.
+# Migrations are idempotent and finish in <2s on an empty DB.
+CMD ["sh", "-c", "alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port 8000"]

@@ -66,15 +66,25 @@ def first_boot_seed_check() -> None:
             logger.info("first_boot_seed_check: funds table has %d rows, skip", n)
             return
         logger.info("first_boot_seed_check: funds table empty, dispatching seed cascade")
+        from celery import chain
         from app.tasks import refresh as refresh_tasks
 
-        refresh_tasks.refresh_fund_master.delay(populate_meta=False)
-        refresh_tasks.refresh_nav_history.delay(
-            scheme_code=None, regular_only=True, limit=200
+        # Sequence matters: each step needs the previous one's output.
+        # refresh_universe → refresh_fund_master → refresh_nav_history
+        #   → compute_metrics → compute_benchmarks → compute_scores.
+        # Use Celery chain so worker runs them in order, not in parallel.
+        # .si() = immutable signature; ignores parent's return value.
+        seed_chain = chain(
+            refresh_tasks.refresh_universe.si(),
+            refresh_tasks.refresh_fund_master.si(populate_meta=False),
+            refresh_tasks.refresh_nav_history.si(
+                scheme_code=None, regular_only=True, limit=200
+            ),
+            refresh_tasks.compute_metrics.si(),
+            refresh_tasks.compute_benchmarks.si(),
+            refresh_tasks.compute_scores.si(),
         )
-        refresh_tasks.compute_metrics.delay()
-        refresh_tasks.compute_benchmarks.delay()
-        refresh_tasks.compute_scores.delay()
+        seed_chain.apply_async()
     except Exception as exc:  # noqa: BLE001
         logger.warning("first_boot_seed_check skipped: %s", exc)
 

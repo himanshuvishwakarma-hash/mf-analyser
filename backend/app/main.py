@@ -70,21 +70,38 @@ def first_boot_seed_check() -> None:
         from app.tasks import refresh as refresh_tasks
 
         # Sequence matters: each step needs the previous one's output.
-        # refresh_universe → refresh_fund_master → refresh_nav_history
-        #   → compute_metrics → compute_benchmarks → compute_scores.
         # Use Celery chain so worker runs them in order, not in parallel.
-        # .si() = immutable signature; ignores parent's return value.
-        seed_chain = chain(
+        # First-boot UX trade-off:
+        #   - Quick seed (limit=500) scores ~500 funds in ~15 min → user sees
+        #     a populated dashboard fast.
+        #   - The nightly beat (23:10 IST) does the FULL universe refresh
+        #     and the next morning every fund is scored.
+        # This avoids forcing a 90-minute wait on first boot.
+        quick_seed = chain(
             refresh_tasks.refresh_universe.si(),
             refresh_tasks.refresh_fund_master.si(populate_meta=False),
             refresh_tasks.refresh_nav_history.si(
-                scheme_code=None, regular_only=True, limit=200
+                scheme_code=None, regular_only=True, limit=500
             ),
             refresh_tasks.compute_metrics.si(),
             refresh_tasks.compute_benchmarks.si(),
             refresh_tasks.compute_scores.si(),
         )
-        seed_chain.apply_async()
+        quick_seed.apply_async()
+
+        # Kick off the FULL NAV backfill afterwards (no limit). This runs in
+        # parallel with quick_seed → user sees first 500 funds within minutes,
+        # then the full ~10k come online ~60 min later, all without manual
+        # intervention.
+        full_seed = chain(
+            refresh_tasks.refresh_nav_history.si(
+                scheme_code=None, regular_only=True
+            ),
+            refresh_tasks.compute_metrics.si(),
+            refresh_tasks.compute_benchmarks.si(),
+            refresh_tasks.compute_scores.si(),
+        )
+        full_seed.apply_async(countdown=900)  # start 15 min after boot
     except Exception as exc:  # noqa: BLE001
         logger.warning("first_boot_seed_check skipped: %s", exc)
 

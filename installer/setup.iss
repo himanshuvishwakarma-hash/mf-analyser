@@ -38,11 +38,13 @@ Name: "desktopicon";  Description: "Create a desktop shortcut"; GroupDescription
 Name: "startupicon";  Description: "Start {#AppName} when Windows starts"; GroupDescription: "Startup behavior:"
 
 [Files]
-Source: "tray_launcher\dist\Z1NLauncher.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "payload\docker-compose.yml";          DestDir: "{app}\payload"; Flags: ignoreversion
-Source: "payload\.env.template";               DestDir: "{app}\payload"; Flags: ignoreversion; AfterInstall: CreateUserEnvIfMissing
-Source: "payload\README.txt";                  DestDir: "{app}\payload"; Flags: ignoreversion
-Source: "assets\z1n.ico";                       DestDir: "{app}\assets"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "tray_launcher\dist\Z1NLauncher.exe"; DestDir: "{app}"; Flags: ignoreversion overwritereadonly
+; docker-compose.yml MUST be force-overwritten on every install — old installs
+; left stale port mappings that broke the frontend until manually patched.
+Source: "payload\docker-compose.yml";          DestDir: "{app}\payload"; Flags: ignoreversion overwritereadonly replacesameversion
+Source: "payload\.env.template";               DestDir: "{app}\payload"; Flags: ignoreversion overwritereadonly; AfterInstall: CreateUserEnvIfMissing
+Source: "payload\README.txt";                  DestDir: "{app}\payload"; Flags: ignoreversion overwritereadonly
+Source: "assets\z1n.ico";                       DestDir: "{app}\assets"; Flags: ignoreversion overwritereadonly skipifsourcedoesntexist
 
 [Icons]
 Name: "{group}\{#AppName}";              Filename: "{app}\Z1NLauncher.exe"
@@ -52,30 +54,40 @@ Name: "{userdesktop}\{#AppName}";      Filename: "{app}\Z1NLauncher.exe"; Tasks:
 Name: "{userstartup}\{#AppName}";        Filename: "{app}\Z1NLauncher.exe"; Tasks: startupicon
 
 [Run]
-; Pre-pull Docker images so first launch is instant (vs 5-10 min download).
-; Best-effort: if Docker is not running yet, the launcher will pull on first start.
+; Pre-pull Docker images during install (5-10 min) so first launch is fast.
 Filename: "{cmd}"; Parameters: "/c docker compose -f ""{app}\payload\docker-compose.yml"" pull"; \
   Description: "Pre-download data service images (about 5 minutes)"; \
   StatusMsg: "Downloading data service images... (one-time, takes about 5 minutes)"; \
+  Flags: runhidden waituntilterminated
+; Bring stack up + wait for all services healthy. With --wait, this only returns
+; after postgres + redis + backend healthchecks pass = no race when user clicks Finish.
+Filename: "{cmd}"; Parameters: "/c docker compose -f ""{app}\payload\docker-compose.yml"" up -d --wait --remove-orphans"; \
+  Description: "Starting the data service"; \
+  StatusMsg: "Starting the data service (about 2 minutes)..."; \
   Flags: runhidden waituntilterminated
 ; Final step: launch the tray app right after install.
 Filename: "{app}\Z1NLauncher.exe"; Description: "Launch {#AppName}"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
 ; Stop the compose stack on uninstall (best-effort, no prompt).
-Filename: "{cmd}"; Parameters: "/c docker compose -f ""{app}\payload\docker-compose.yml"" down"; Flags: runhidden; RunOnceId: "ComposeDown"
+Filename: "{cmd}"; Parameters: "/c docker compose -f ""{app}\payload\docker-compose.yml"" down --remove-orphans"; Flags: runhidden; RunOnceId: "ComposeDown"
+
+[UninstallDelete]
+; Wipe the payload dir on uninstall so a re-install never inherits a stale
+; .env, docker-compose.yml, or partial files.
+Type: filesandordirs; Name: "{app}\payload"
 
 [Code]
 function InitializeSetup(): Boolean;
 var
-  DockerOk: Boolean;
+  DockerInstalled, DockerRunning: Boolean;
   Resp: Integer;
 begin
   Result := True;
-  // Detect Docker Desktop: look for docker.exe via PATH (where.exe).
-  DockerOk := Exec(ExpandConstant('{cmd}'), '/c where docker >nul 2>nul', '',
-                   SW_HIDE, ewWaitUntilTerminated, Resp) and (Resp = 0);
-  if not DockerOk then begin
+  // 1. Docker CLI must be on PATH.
+  DockerInstalled := Exec(ExpandConstant('{cmd}'), '/c where docker >nul 2>nul', '',
+                          SW_HIDE, ewWaitUntilTerminated, Resp) and (Resp = 0);
+  if not DockerInstalled then begin
     if MsgBox(
       'Docker Desktop is required but was not detected.' + #13#10 + #13#10 +
       'Click Yes to open the Docker Desktop download page in your browser, ' +
@@ -84,6 +96,21 @@ begin
       ShellExec('open', 'https://www.docker.com/products/docker-desktop/', '', '',
                 SW_SHOWNORMAL, ewNoWait, Resp);
     end;
+    Result := False;
+    Exit;
+  end;
+  // 2. Docker engine (daemon) must be running. `docker info` returns 0 only
+  //    when the daemon is reachable. We can't pre-pull images otherwise.
+  DockerRunning := Exec(ExpandConstant('{cmd}'), '/c docker info >nul 2>nul', '',
+                        SW_HIDE, ewWaitUntilTerminated, Resp) and (Resp = 0);
+  if not DockerRunning then begin
+    MsgBox(
+      'Docker Desktop is installed but not running.' + #13#10 + #13#10 +
+      'Please:' + #13#10 +
+      '  1. Open Docker Desktop from your Start menu' + #13#10 +
+      '  2. Wait until the whale icon in your system tray is steady (not animating)' + #13#10 +
+      '  3. Re-run this installer',
+      mbInformation, MB_OK);
     Result := False;
   end;
 end;

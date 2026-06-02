@@ -19,8 +19,13 @@ RUN pip install -r requirements.txt
 
 COPY . .
 
+# Add entrypoint that retries migration on transient Postgres errors and
+# fails LOUDLY (non-zero exit) so Docker restarts the container instead of
+# silently serving a half-migrated schema.
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
+
 EXPOSE 8000
 
-# Wait for Postgres, run migrations, then start uvicorn.
-# Migrations are idempotent and finish in <2s on an empty DB.
-CMD ["sh", "-c", "alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+ENTRYPOINT ["/docker-entrypoint.sh"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

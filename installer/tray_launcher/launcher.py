@@ -103,10 +103,24 @@ def docker_available() -> bool:
 
 
 def stack_up() -> bool:
-    r = _run_compose(["up", "-d"], timeout=300)
-    if r.returncode != 0:
-        logger.error("compose up failed: %s", r.stderr.strip())
+    """Bring stack up — always pull latest images, wait until services healthy.
+
+    Steps:
+      1. compose pull  (force-refresh :latest tags; ignore failures so offline
+         users with cached images still proceed)
+      2. compose up -d --wait --remove-orphans
+         --wait makes Docker block until every service with a healthcheck
+         reports healthy. No browser opens onto a broken backend.
+    """
+    pull = _run_compose(["pull"], timeout=600)
+    if pull.returncode != 0:
+        logger.warning("compose pull non-zero (continuing with cached images): %s",
+                       pull.stderr.strip()[:500])
+    up = _run_compose(["up", "-d", "--wait", "--remove-orphans"], timeout=600)
+    if up.returncode != 0:
+        logger.error("compose up failed: %s", up.stderr.strip())
         return False
+    logger.info("compose up + --wait succeeded; all services healthy")
     return True
 
 

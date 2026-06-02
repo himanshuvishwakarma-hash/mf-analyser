@@ -1,11 +1,16 @@
 # Z1N MF Analyser - production compose, bundled with installer.
 # No bind mounts - all data lives in named volumes so it survives upgrades.
+#
+# Image pull policy: ALWAYS pull :latest on start (no stale images bite users).
+# Container health: every service has a healthcheck so the launcher can wait
+# for a true "ready" state before opening the browser.
 
 services:
   postgres:
     image: postgres:15-alpine
     container_name: z1n_mf_pg
     restart: unless-stopped
+    pull_policy: missing
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-mfa}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
@@ -16,22 +21,26 @@ services:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mfa} -d ${POSTGRES_DB:-mfa}"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 30s
 
   redis:
     image: redis:7-alpine
     container_name: z1n_mf_redis
     restart: unless-stopped
+    pull_policy: missing
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 3s
       retries: 5
+      start_period: 10s
 
   backend:
     image: ghcr.io/himanshuvishwakarma-hash/mf-analyser-backend:${APP_VERSION:-latest}
     container_name: z1n_mf_backend
     restart: unless-stopped
+    pull_policy: always
     depends_on:
       postgres: { condition: service_healthy }
       redis:    { condition: service_healthy }
@@ -44,29 +53,45 @@ services:
       ADMIN_TOKEN: ${ADMIN_TOKEN:-}
     ports:
       - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 90s   # allow alembic migrate + first-boot seed dispatch
 
   worker:
     image: ghcr.io/himanshuvishwakarma-hash/mf-analyser-backend:${APP_VERSION:-latest}
     container_name: z1n_mf_worker
     restart: unless-stopped
+    pull_policy: always
     depends_on:
-      - backend
+      backend: { condition: service_healthy }
     command: ["celery", "-A", "app.tasks.celery_app", "worker", "--beat", "-l", "info"]
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-mfa}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-mfa}
       REDIS_URL: redis://redis:6379/0
       CELERY_SCHEDULE_HOUR: "23"
+      # Skip alembic — backend container already ran it. Avoids double-migration race.
+      SKIP_MIGRATIONS: "1"
 
   frontend:
     image: ghcr.io/himanshuvishwakarma-hash/mf-analyser-frontend:${APP_VERSION:-latest}
     container_name: z1n_mf_frontend
     restart: unless-stopped
+    pull_policy: always
     depends_on:
-      - backend
+      backend: { condition: service_healthy }
+    # Frontend image now serves a static Vite build via nginx on container port 80.
+    # Host port 5173 maps to container 80 — works for fresh AND legacy installs.
     ports:
       - "5173:80"
-    environment:
-      VITE_API_BASE_URL: http://localhost:8000/api/v1
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
 
 volumes:
   pg_data:
